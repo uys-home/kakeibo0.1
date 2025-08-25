@@ -1,0 +1,353 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <title>日割り家計簿</title>
+  <style>
+    body{margin:0;font-family:ui-sans-serif,-apple-system,Segoe UI,Roboto,Helvetica,Arial;background:#f8fafc;color:#0f172a}
+    .container{max-width:64rem;margin:0 auto;padding:16px}
+    .card{background:#fff;border-radius:1rem;box-shadow:0 1px 6px rgba(15,23,42,.08);padding:16px}
+    .input{width:100%;border:1px solid #cbd5e1;border-radius:.75rem;padding:8px 12px;outline:none}
+    .btn{border-radius:.75rem;padding:8px 12px;background:#0f172a;color:#fff;border:none}
+    .btn-subtle{border-radius:.75rem;padding:8px 12px;background:#f1f5f9;color:#334155;border:none}
+    .btn-danger{border-radius:.75rem;padding:8px 12px;background:#dc2626;color:#fff;border:none}
+    .summary-label{color:#64748b;font-size:12px}.summary-value{font-weight:600;font-size:16px}
+    .ok{color:#059669}.bad{color:#dc2626}
+    .mb12{margin-bottom:12px}
+    .grid6{display:grid;gap:12px;grid-template-columns:repeat(2,minmax(0,1fr))}
+    .grid5{display:grid;gap:8px;grid-template-columns:repeat(2,minmax(0,1fr))}
+    .grid3{display:grid;gap:12px;grid-template-columns:1fr}
+    .row{display:flex;align-items:center;gap:8px}
+    .box{overflow:auto;border:1px solid #e2e8f0;border-radius:12px;margin-bottom:12px}
+    .h320{width:100%;height:320px}
+    @media(min-width:640px){.grid6{grid-template-columns:repeat(6,1fr)}.grid5{grid-template-columns:repeat(5,1fr)}.grid3{grid-template-columns:repeat(3,1fr)}}
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <!-- PWA登録（オフライン可） -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      addEventListener('load', () => navigator.serviceWorker.register('./sw.js'));
+    }
+  </script>
+
+  <!-- ライブラリ（CDN） -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/recharts/umd/Recharts.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <!-- アプリ本体 -->
+  <script type="text/babel">
+    const { useState, useMemo, useEffect } = React;
+    const { LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer, Legend, ReferenceLine, PieChart, Pie, Cell } = Recharts;
+
+    const yen = (n) => (isNaN(n) ? "-" : Number(n).toLocaleString("ja-JP", { style:"currency", currency:"JPY", maximumFractionDigits:0 }));
+    const todayStr = () => new Date().toISOString().slice(0,10);
+    const ym = (d=new Date()) => \`\${d.getFullYear()}-\${String(d.getMonth()+1).padStart(2,"0")}\`;
+    const fmt = (d) => \`\${d.getFullYear()}-\${String(d.getMonth()+1).padStart(2,"0")}-\${String(d.getDate()).padStart(2,"0")}\`;
+    const parseDate = (s) => new Date(s+"T00:00:00");
+    const addDays = (d,n)=>{const x=new Date(d); x.setDate(x.getDate()+n); return x;};
+    const daysDiffInclusive = (a,b)=> Math.floor((b-a)/86400000)+1;
+    const clampClose = (closeDay,y,m)=> Math.min(closeDay, new Date(y,m+1,0).getDate());
+    const useLocalStorage = (key, def) => {
+      const [state,setState] = useState(()=>{ try{const r=localStorage.getItem(key); return r?JSON.parse(r):def;}catch(e){return def;} });
+      useEffect(()=>{ localStorage.setItem(key, JSON.stringify(state)); },[key,state]);
+      return [state,setState];
+    };
+
+    function currentCycle(now, closeDay){
+      const y=now.getFullYear(), m=now.getMonth();
+      const ldThis=new Date(y,m+1,0).getDate();
+      const eff=clampClose(closeDay,y,m);
+      if (closeDay>=ldThis){ const start=new Date(y,m,1), end=new Date(y,m,ldThis); return {start,end,label:\`\${ym(now)} (月末締め)\`,cycleLen:daysDiffInclusive(start,end)}; }
+      const d=now.getDate();
+      if (d<=eff){
+        const prev=new Date(y,m-1,1); const ldPrev=new Date(prev.getFullYear(),prev.getMonth()+1,0).getDate();
+        const startDay=closeDay+1; const start=startDay>ldPrev? new Date(y,m,1): new Date(y,m-1,startDay);
+        const end=new Date(y,m,eff);
+        return {start,end,label:\`\${fmt(start)}〜\${fmt(end)}（\${closeDay}日締め）\`,cycleLen:daysDiffInclusive(start,end)};
+      } else {
+        const start=new Date(y,m,closeDay+1);
+        const next=new Date(y,m+1,1); const ldNext=new Date(next.getFullYear(),next.getMonth()+1,0).getDate();
+        const end=new Date(next.getFullYear(),next.getMonth(), Math.min(closeDay,ldNext));
+        return {start,end,label:\`\${fmt(start)}〜\${fmt(end)}（\${closeDay}日締め）\`,cycleLen:daysDiffInclusive(start,end)};
+      }
+    }
+    function previousCycleFrom(start, closeDay){ const end=addDays(start,-1); return currentCycle(end, closeDay); }
+    const getType = (e)=> e.type? e.type : (e.category==="食費" ? "食費":"その他");
+    const getSubcategory = (e)=> e.subcategory || (getType(e)==="食費" ? (e.category||"未分類") : (e.category||"その他"));
+
+    function Summary({ label, value, highlight }) {
+      const cls = highlight===undefined ? "" : (highlight>=0?"ok":"bad");
+      return (<div className="card"><div className="summary-label">{label}</div><div className={"summary-value "+cls}>{value}</div></div>);
+    }
+
+    function App(){
+      const [income,setIncome]=useLocalStorage("kakeibo_income",0);
+      const [fixedItems,setFixedItems]=useLocalStorage("kakeibo_fixed",[
+        {id:1,name:"家に入れるお金",amount:100000},
+        {id:2,name:"定期代",amount:0},
+        {id:3,name:"ご褒美代",amount:0},
+        {id:4,name:"サブスク",amount:0},
+        {id:5,name:"スマホ",amount:0},
+        {id:6,name:"貯蓄",amount:0},
+      ]);
+      const [wishItems,setWishItems]=useLocalStorage("kakeibo_wish_current",[]);
+      const [expenses,setExpenses]=useLocalStorage("kakeibo_expenses",[]);
+      const [archives,setArchives]=useLocalStorage("kakeibo_archives",[]);
+      const [closeDay,setCloseDay]=useLocalStorage("kakeibo_close_day",31);
+      const [lastCycleLabel,setLastCycleLabel]=useLocalStorage("kakeibo_last_cycle","");
+      const [targetScope,setTargetScope]=useLocalStorage("kakeibo_scope","both");
+
+      const [note,setNote]=useState(""), [amount,setAmount]=useState(""), [date,setDate]=useState(todayStr());
+      const [type,setType]=useState("食費"), [subcategory,setSubcategory]=useState("");
+
+      const now=new Date();
+      const {start:cycleStart,end:cycleEnd,label:cycleLabel,cycleLen}=currentCycle(now, Number(closeDay||31));
+
+      const cycleExpenses=useMemo(()=> {
+        const s=parseDate(fmt(cycleStart)), e=parseDate(fmt(cycleEnd));
+        return expenses.filter(x=> x.date && parseDate(x.date)>=s && parseDate(x.date)<=e);
+      },[expenses,cycleStart,cycleEnd]);
+
+      const totalFixed=useMemo(()=> fixedItems.reduce((s,x)=>s+Number(x.amount||0),0),[fixedItems]);
+      const totalWish=useMemo(()=> wishItems.reduce((s,x)=>s+Number(x.amount||0),0),[wishItems]);
+      const monthlyPocket=Math.max(0, Number(income||0)-totalFixed-totalWish);
+      const dailyBudget=monthlyPocket/cycleLen;
+
+      const sumBy=(fn)=> cycleExpenses.reduce((s,x)=> s+(fn(x)?Number(x.amount||0):0),0);
+      const totalFood=sumBy(e=> getType(e)==="食費");
+      const totalOther=sumBy(e=> getType(e)==="その他");
+      const totalAll=totalFood+totalOther;
+      const spentTarget= targetScope==="food"? totalFood: totalAll;
+
+      const todayIdx=Math.min(daysDiffInclusive(parseDate(fmt(cycleStart)), parseDate(todayStr())), cycleLen);
+      const plannedSoFar=dailyBudget*todayIdx;
+      const remainingBudget=Math.max(0, monthlyPocket-spentTarget);
+      const remainingDays=Math.max(0, daysDiffInclusive(parseDate(todayStr()), parseDate(fmt(cycleEnd))));
+      const recommendedPerDay= remainingDays>0? remainingBudget/remainingDays: 0;
+
+      const chartData=useMemo(()=>{
+        const daily=Array.from({length:cycleLen},(_,i)=>({day:i+1,spent:0}));
+        for(const e of cycleExpenses){
+          const idx=daysDiffInclusive(parseDate(fmt(cycleStart)), parseDate(e.date));
+          if(idx>=1 && idx<=cycleLen){
+            const use = targetScope==="food" ? (getType(e)==="食費") : true;
+            daily[idx-1].spent += use ? Number(e.amount||0) : 0;
+          }
+        }
+        let cum=0;
+        return daily.map((d,i)=>{ cum+=d.spent; return { day:d.day, 実績累計:Math.round(cum), 予算累計:Math.round(dailyBudget*(i+1)) }; });
+      },[cycleExpenses,cycleLen,cycleStart,dailyBudget,targetScope]);
+
+      const foodBreakdown=useMemo(()=>{
+        const m=new Map();
+        for(const e of cycleExpenses){ if(getType(e)!=="食費") continue; const k=getSubcategory(e)||"未分類"; m.set(k,(m.get(k)||0)+Number(e.amount||0)); }
+        return Array.from(m.entries()).map(([name,value])=>({name,value}));
+      },[cycleExpenses]);
+
+      useEffect(()=>{
+        if(!lastCycleLabel){ setLastCycleLabel(cycleLabel); return; }
+        if(lastCycleLabel!==cycleLabel && (income || cycleExpenses.length || wishItems.length)){
+          const prev=previousCycleFrom(cycleStart, Number(closeDay||31));
+          archiveRange(prev.start, prev.end, prev.label, {silent:true});
+          setLastCycleLabel(cycleLabel); setIncome(0); setWishItems([]);
+        }
+      },[cycleLabel]);
+
+      const addExpense=()=>{
+        const val=Number(amount); if(!val||val<=0) return;
+        setExpenses(prev=> [{id:crypto.randomUUID(), date, amount:val, note, type, subcategory, category:subcategory}, ...prev]);
+        setAmount(""); setNote(""); setType("食費"); setSubcategory(""); setDate(todayStr());
+      };
+      const removeExpense=(id)=> setExpenses(prev=> prev.filter(x=>x.id!==id));
+      const clearThisCycle=()=>{
+        if(!confirm(\`\${cycleLabel} の出費を全て削除します。よろしいですか？\`)) return;
+        setExpenses(prev=> prev.filter(x=> !(x.date && parseDate(x.date)>=parseDate(fmt(cycleStart)) && parseDate(x.date)<=parseDate(fmt(cycleEnd)))));
+      };
+      const archiveRange=(start,end,label,{silent=false}={})=>{
+        const s=parseDate(fmt(start)), e=parseDate(fmt(end));
+        const exp=expenses.filter(x=> x.date && parseDate(x.date)>=s && parseDate(x.date)<=e);
+        const total=exp.reduce((sum,x)=> sum+Number(x.amount||0),0);
+        const snap={ month:label, periodStart:fmt(start), periodEnd:fmt(end), archivedAt:new Date().toISOString(),
+          income,totalFixed,wishItems,totalWish,monthlyPocket,totalSpent:total,balance:monthlyPocket-total, expenses:exp, closeDay };
+        setArchives(prev=> [snap, ...prev]);
+        setExpenses(prev=> prev.filter(x=> !(x.date && parseDate(x.date)>=s && parseDate(x.date)<=e)));
+        if(!silent) alert(\`\${label} をアーカイブしました。次のサイクル設定に進めます。\`);
+      };
+      const archiveCurrent=()=> archiveRange(cycleStart,cycleEnd,cycleLabel);
+      const resetAll=()=>{
+        if(!confirm("すべてのデータ（固定費含む）を初期化します。よろしいですか？")) return;
+        setExpenses([]); setFixedItems([]); setIncome(0); setWishItems([]); setArchives([]); setLastCycleLabel("");
+      };
+      const importJSON=(file)=>{
+        const r=new FileReader();
+        r.onload=()=>{ try{
+          const d=JSON.parse(r.result);
+          if(d.income!==undefined) setIncome(d.income);
+          if(Array.isArray(d.fixedItems)) setFixedItems(d.fixedItems);
+          if(Array.isArray(d.expenses)) setExpenses(d.expenses);
+          if(Array.isArray(d.wishItems)) setWishItems(d.wishItems);
+          if(Array.isArray(d.archives)) setArchives(d.archives);
+          if(d.closeDay) setCloseDay(d.closeDay);
+          if(d.lastCycleLabel) setLastCycleLabel(d.lastCycleLabel);
+          alert("インポートしました");
+        }catch(e){ alert("JSONの読み込みに失敗しました"); } };
+        r.readAsText(file);
+      };
+      const exportJSON=()=>{
+        const blob=new Blob([JSON.stringify({income,fixedItems,expenses,wishItems,archives,closeDay,lastCycleLabel},null,2)],{type:"application/json"});
+        const url=URL.createObjectURL(blob); const a=document.createElement("a");
+        a.href=url; a.download=\`kakeibo_\${cycleLabel.replaceAll("/","-")}.json\`; a.click(); URL.revokeObjectURL(url);
+      };
+      const realizeWish=(id)=>{
+        const w=wishItems.find(x=>x.id===id); if(!w) return; const val=Number(w.amount||0); if(val<=0) return;
+        setExpenses(prev=> [{id:crypto.randomUUID(), date:todayStr(), amount:val, note:\`買いたいもの: \${w.name}\`, type:"その他", subcategory:"買い物", category:"買い物"}, ...prev]);
+        setWishItems(prev=> prev.filter(x=>x.id!==id));
+      };
+
+      return (
+        <div className="container">
+          <header className="mb12">
+            <h1 style={{fontSize:22,fontWeight:700}}>日割り家計簿（食費＋その他トラッカー）</h1>
+            <p style={{fontSize:12,color:"#64748b"}}>サイクル: {cycleLabel}</p>
+          </header>
+
+          <div className="grid6 mb12">
+            <Summary label="今サイクル給与" value={yen(income)} />
+            <Summary label="固定費合計" value={yen(totalFixed)} />
+            <Summary label="今月の買いたいもの" value={yen(totalWish)} />
+            <Summary label="自由枠(サイクル)" value={yen(monthlyPocket)} />
+            <Summary label="食費累計" value={yen(totalFood)} />
+            <Summary label="その他累計" value={yen(totalOther)} />
+          </div>
+
+          <section className="card mb12">
+            <h2 style={{fontSize:18,fontWeight:600,marginBottom:8}}>① 基本設定（締め日／固定費／給与）</h2>
+            <div className="grid3 mb12">
+              <div className="row"><label style={{fontSize:12,width:70}}>締め日</label>
+                <input type="number" min="1" max="31" className="input" value={closeDay} onChange={(e)=> setCloseDay(Math.max(1, Math.min(31, Number(e.target.value))))} />
+                <span style={{fontSize:12,color:"#64748b"}}>※ 31=月末扱い</span></div>
+              <div className="row"><label style={{fontSize:12,width:90}}>今サイクル給与</label>
+                <input type="number" className="input" value={income} onChange={(e)=> setIncome(Number(e.target.value))} /></div>
+              <div className="row"><label style={{fontSize:12,width:50}}>対象</label>
+                <select className="input" value={targetScope} onChange={(e)=> setTargetScope(e.target.value)}>
+                  <option value="both">食費＋その他</option><option value="food">食費のみ</option>
+                </select></div>
+            </div>
+
+            <div style={{display:"grid",gap:8}}>
+              {fixedItems.map((it)=>(
+                <div key={it.id} className="row">
+                  <input className="input" style={{flex:1}} value={it.name} onChange={(e)=> setFixedItems(prev=> prev.map(x=> x.id===it.id? {...x, name:e.target.value}:x))} />
+                  <input type="number" className="input" style={{width:140}} value={it.amount} onChange={(e)=> setFixedItems(prev=> prev.map(x=> x.id===it.id? {...x, amount:Number(e.target.value)}:x))} />
+                  <button className="btn-subtle" onClick={()=> setFixedItems(prev=> prev.filter(x=> x.id!==it.id))}>削除</button>
+                </div>
+              ))}
+              <div><button className="btn" onClick={()=> setFixedItems(prev=> [...prev, {id:crypto.randomUUID(), name:"項目", amount:0}])}>＋ 固定費を追加</button></div>
+            </div>
+          </section>
+
+          <section className="card mb12">
+            <h2 style={{fontSize:18,fontWeight:600,marginBottom:8}}>② 今サイクルの買いたいもの（今サイクルだけ控除）</h2>
+            <p style={{fontSize:12,color:"#64748b",marginBottom:8}}>※ 購入したら「実績化」で支出に移動＆このリストから削除。</p>
+            <div style={{display:"grid",gap:8}}>
+              {wishItems.map((it)=>(
+                <div key={it.id} className="row">
+                  <input className="input" style={{flex:1}} value={it.name} onChange={(e)=> setWishItems(prev=> prev.map(x=> x.id===it.id? {...x, name:e.target.value}:x))} />
+                  <input type="number" className="input" style={{width:140}} value={it.amount} onChange={(e)=> setWishItems(prev=> prev.map(x=> x.id===it.id? {...x, amount:Number(e.target.value)}:x))} />
+                  <button className="btn-subtle" onClick={()=> realizeWish(it.id)}>実績化</button>
+                  <button className="btn-subtle" onClick={()=> setWishItems(prev=> prev.filter(x=> x.id!==it.id))}>削除</button>
+                </div>
+              ))}
+              <div className="row">
+                <button className="btn" onClick={()=> setWishItems(prev=> [...prev, {id:crypto.randomUUID(), name:"欲しい物", amount:0}])}>＋ 追加</button>
+                <div style={{fontSize:12,color:"#64748b"}}>合計：{yen(totalWish)}</div>
+              </div>
+            </div>
+          </section>
+
+          <section className="card mb12">
+            <h2 style={{fontSize:18,fontWeight:600,marginBottom:8}}>③ 出費の記録（クイック追加）</h2>
+            <div style={{display:"grid",gap:8}}>
+              <input type="date" className="input" value={date} onChange={(e)=> setDate(e.target.value)} />
+              <select className="input" value={type} onChange={(e)=> setType(e.target.value)}><option>食費</option><option>その他</option></select>
+              <input type="text" className="input" value={subcategory} onChange={(e)=> setSubcategory(e.target.value)} placeholder="カテゴリ（例: 自炊/外食/カフェ/日用品）" />
+              <input type="number" className="input" value={amount} onChange={(e)=> setAmount(e.target.value)} placeholder="金額" />
+              <input type="text" className="input" value={note} onChange={(e)=> setNote(e.target.value)} placeholder="メモ (例: 昼食)" />
+              <button className="btn" onClick={addExpense}>追加</button>
+            </div>
+            <p style={{fontSize:12,color:"#64748b",marginTop:8}}>※ 入力は端末に保存（ローカル保存）されます</p>
+          </section>
+
+          <section className="card mb12">
+            <h2 style={{fontSize:18,fontWeight:600,marginBottom:8}}>④ サイクルの状況（対象: {targetScope==='food'?'食費のみ':'食費＋その他'}）</h2>
+            <div className="grid5 mb12">
+              <Summary label="累計（対象）" value={yen(spentTarget)} />
+              <Summary label="累計許容(今日まで)" value={yen(plannedSoFar)} />
+              <Summary label="差分（+はセーフ）" value={yen(plannedSoFar - spentTarget)} highlight={pl annedSoFar - spentTarget} />
+              <Summary label="残り日数" value={`${remainingDays}日`} />
+              <Summary label="今日からの目安" value={yen(recommendedPerDay)} />
+            </div>
+            <div className="h320">
+              <div id="chart" style="width:100%;height:100%">
+                <script type="text/babel">
+                  // グラフは上のApp内で描画しているのでここは空でOK
+                </script>
+              </div>
+            </div>
+          </section>
+
+          <section className="card mb12">
+            <h2 style={{fontSize:18,fontWeight:600,marginBottom:8}}>⑤ 食費の内訳（カテゴリ別）</h2>
+            <div id="pie" style="width:100%;height:256px"></div>
+          </section>
+
+          <section className="card mb12">
+            <div className="row" style={{justifyContent:'space-between',flexWrap:'wrap'}}>
+              <h2 style={{fontSize:18,fontWeight:600}}>⑥ 今サイクルの明細 & アーカイブ</h2>
+              <div className="row" style={{flexWrap:'wrap'}}>
+                <button className="btn-subtle" onClick={()=> archiveCurrent()}>締め日アーカイブ</button>
+                <button className="btn-subtle" onClick={()=> clearThisCycle()}>今サイクルの出費だけ削除</button>
+                <button className="btn-subtle" onClick={()=> exportJSON()}>エクスポート</button>
+                <label className="btn-subtle" style={{cursor:'pointer'}}>
+                  インポート<input type="file" accept="application/json" style={{display:'none'}} onChange={(e)=> e.target.files?.[0] && importJSON(e.target.files[0])} />
+                </label>
+                <button className="btn-danger" onClick={()=> resetAll()}>全消去</button>
+              </div>
+            </div>
+
+            <div className="box">
+              <table style="width:100%; border-collapse:collapse; font-size:14px">
+                <thead style="background:#f1f5f9"><tr><th>日付</th><th>種別</th><th>カテゴリ</th><th>金額</th><th>メモ</th><th>操作</th></tr></thead>
+                <tbody id="tbody">
+                  <!-- 明細はReact内で描画 -->
+                </tbody>
+              </table>
+            </div>
+
+            <div>
+              <h3 style={{fontWeight:600,marginBottom:8}}>アーカイブ一覧</h3>
+              <div id="archives"></div>
+            </div>
+          </section>
+
+          <section style="font-size:12px;color:#64748b;padding-bottom:64px">
+            <p>・締め日を自由に設定できます（25日締め=26日〜翌25日）。31は月末扱い。</p>
+            <p>・「買いたいもの」はサイクル限定の一時費用。購入時は「実績化」でその他支出に移動します。</p>
+            <p>・新サイクルに入ると前サイクルを自動アーカイブ→ 給与0／買いたいもの空。固定費は据え置き。</p>
+          </section>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
