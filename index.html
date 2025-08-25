@@ -29,54 +29,50 @@
 <body>
   <div id="root"></div>
 
-  <!-- PWA登録（オフライン可） -->
+  <!-- PWA登録（任意） -->
   <script>
     if ('serviceWorker' in navigator) {
       addEventListener('load', () => navigator.serviceWorker.register('./sw.js'));
     }
   </script>
 
-  <!-- ライブラリ（CDN） -->
+  <!-- ライブラリ -->
   <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/recharts/umd/Recharts.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
-  <!-- アプリ本体 -->
+  <!-- アプリ本体（※この1つのscriptだけ。中に</script>を含めない） -->
   <script type="text/babel">
     const { useState, useMemo, useEffect } = React;
     const { LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer, Legend, ReferenceLine, PieChart, Pie, Cell } = Recharts;
 
     const yen = (n) => (isNaN(n) ? "-" : Number(n).toLocaleString("ja-JP", { style:"currency", currency:"JPY", maximumFractionDigits:0 }));
     const todayStr = () => new Date().toISOString().slice(0,10);
-    const ym = (d=new Date()) => \`\${d.getFullYear()}-\${String(d.getMonth()+1).padStart(2,"0")}\`;
-    const fmt = (d) => \`\${d.getFullYear()}-\${String(d.getMonth()+1).padStart(2,"0")}-\${String(d.getDate()).padStart(2,"0")}\`;
+    const ym = (d=new Date()) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
+    const fmt = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
     const parseDate = (s) => new Date(s+"T00:00:00");
     const addDays = (d,n)=>{const x=new Date(d); x.setDate(x.getDate()+n); return x;};
     const daysDiffInclusive = (a,b)=> Math.floor((b-a)/86400000)+1;
     const clampClose = (closeDay,y,m)=> Math.min(closeDay, new Date(y,m+1,0).getDate());
-    const useLocalStorage = (key, def) => {
-      const [state,setState] = useState(()=>{ try{const r=localStorage.getItem(key); return r?JSON.parse(r):def;}catch(e){return def;} });
-      useEffect(()=>{ localStorage.setItem(key, JSON.stringify(state)); },[key,state]);
-      return [state,setState];
-    };
+    const useLocalStorage = (key, def) => { const [s,setS]=React.useState(()=>{try{const r=localStorage.getItem(key);return r?JSON.parse(r):def}catch(e){return def}}); React.useEffect(()=>{localStorage.setItem(key,JSON.stringify(s))},[key,s]); return [s,setS]; };
 
     function currentCycle(now, closeDay){
       const y=now.getFullYear(), m=now.getMonth();
       const ldThis=new Date(y,m+1,0).getDate();
       const eff=clampClose(closeDay,y,m);
-      if (closeDay>=ldThis){ const start=new Date(y,m,1), end=new Date(y,m,ldThis); return {start,end,label:\`\${ym(now)} (月末締め)\`,cycleLen:daysDiffInclusive(start,end)}; }
+      if (closeDay>=ldThis){ const start=new Date(y,m,1), end=new Date(y,m,ldThis); return {start,end,label:`${ym(now)} (月末締め)`,cycleLen:daysDiffInclusive(start,end)}; }
       const d=now.getDate();
       if (d<=eff){
         const prev=new Date(y,m-1,1); const ldPrev=new Date(prev.getFullYear(),prev.getMonth()+1,0).getDate();
         const startDay=closeDay+1; const start=startDay>ldPrev? new Date(y,m,1): new Date(y,m-1,startDay);
         const end=new Date(y,m,eff);
-        return {start,end,label:\`\${fmt(start)}〜\${fmt(end)}（\${closeDay}日締め）\`,cycleLen:daysDiffInclusive(start,end)};
+        return {start,end,label:`${fmt(start)}〜${fmt(end)}（${closeDay}日締め）`,cycleLen:daysDiffInclusive(start,end)};
       } else {
         const start=new Date(y,m,closeDay+1);
         const next=new Date(y,m+1,1); const ldNext=new Date(next.getFullYear(),next.getMonth()+1,0).getDate();
         const end=new Date(next.getFullYear(),next.getMonth(), Math.min(closeDay,ldNext));
-        return {start,end,label:\`\${fmt(start)}〜\${fmt(end)}（\${closeDay}日締め）\`,cycleLen:daysDiffInclusive(start,end)};
+        return {start,end,label:`${fmt(start)}〜${fmt(end)}（${closeDay}日締め）`,cycleLen:daysDiffInclusive(start,end)};
       }
     }
     function previousCycleFrom(start, closeDay){ const end=addDays(start,-1); return currentCycle(end, closeDay); }
@@ -168,7 +164,7 @@
       };
       const removeExpense=(id)=> setExpenses(prev=> prev.filter(x=>x.id!==id));
       const clearThisCycle=()=>{
-        if(!confirm(\`\${cycleLabel} の出費を全て削除します。よろしいですか？\`)) return;
+        if(!confirm(`${cycleLabel} の出費を全て削除します。よろしいですか？`)) return;
         setExpenses(prev=> prev.filter(x=> !(x.date && parseDate(x.date)>=parseDate(fmt(cycleStart)) && parseDate(x.date)<=parseDate(fmt(cycleEnd)))));
       };
       const archiveRange=(start,end,label,{silent=false}={})=>{
@@ -179,7 +175,7 @@
           income,totalFixed,wishItems,totalWish,monthlyPocket,totalSpent:total,balance:monthlyPocket-total, expenses:exp, closeDay };
         setArchives(prev=> [snap, ...prev]);
         setExpenses(prev=> prev.filter(x=> !(x.date && parseDate(x.date)>=s && parseDate(x.date)<=e)));
-        if(!silent) alert(\`\${label} をアーカイブしました。次のサイクル設定に進めます。\`);
+        if(!silent) alert(`${label} をアーカイブしました。次のサイクル設定に進めます。`);
       };
       const archiveCurrent=()=> archiveRange(cycleStart,cycleEnd,cycleLabel);
       const resetAll=()=>{
@@ -204,11 +200,11 @@
       const exportJSON=()=>{
         const blob=new Blob([JSON.stringify({income,fixedItems,expenses,wishItems,archives,closeDay,lastCycleLabel},null,2)],{type:"application/json"});
         const url=URL.createObjectURL(blob); const a=document.createElement("a");
-        a.href=url; a.download=\`kakeibo_\${cycleLabel.replaceAll("/","-")}.json\`; a.click(); URL.revokeObjectURL(url);
+        a.href=url; a.download=`kakeibo_${cycleLabel.replaceAll("/","-")}.json`; a.click(); URL.revokeObjectURL(url);
       };
       const realizeWish=(id)=>{
         const w=wishItems.find(x=>x.id===id); if(!w) return; const val=Number(w.amount||0); if(val<=0) return;
-        setExpenses(prev=> [{id:crypto.randomUUID(), date:todayStr(), amount:val, note:\`買いたいもの: \${w.name}\`, type:"その他", subcategory:"買い物", category:"買い物"}, ...prev]);
+        setExpenses(prev=> [{id:crypto.randomUUID(), date:todayStr(), amount:val, note:`買いたいもの: ${w.name}`, type:"その他", subcategory:"買い物", category:"買い物"}, ...prev]);
         setWishItems(prev=> prev.filter(x=>x.id!==id));
       };
 
@@ -291,22 +287,43 @@
             <div className="grid5 mb12">
               <Summary label="累計（対象）" value={yen(spentTarget)} />
               <Summary label="累計許容(今日まで)" value={yen(plannedSoFar)} />
-              <Summary label="差分（+はセーフ）" value={yen(plannedSoFar - spentTarget)} highlight={pl annedSoFar - spentTarget} />
+              <Summary label="差分（+はセーフ）" value={yen(plannedSoFar - spentTarget)} highlight={plannedSoFar - spentTarget} />
               <Summary label="残り日数" value={`${remainingDays}日`} />
               <Summary label="今日からの目安" value={yen(recommendedPerDay)} />
             </div>
             <div className="h320">
-              <div id="chart" style="width:100%;height:100%">
-                <script type="text/babel">
-                  // グラフは上のApp内で描画しているのでここは空でOK
-                </script>
-              </div>
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={chartData} margin={{ top: 10, right: 20, bottom: 0, left: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="day" tickFormatter={(d)=>`${d}日`} />
+                  <YAxis tickFormatter={(v)=>`${Math.round(v/1000)}k`} />
+                  <Tooltip formatter={(v)=>yen(Number(v))} labelFormatter={(l)=>`${l}日`} />
+                  <Legend />
+                  <ReferenceLine x={todayIdx} strokeDasharray="4 4" />
+                  <Line type="monotone" dataKey="予算累計" dot={false} strokeWidth={3} />
+                  <Line type="monotone" dataKey="実績累計" dot={false} strokeWidth={3} />
+                </LineChart>
+              </ResponsiveContainer>
             </div>
           </section>
 
           <section className="card mb12">
             <h2 style={{fontSize:18,fontWeight:600,marginBottom:8}}>⑤ 食費の内訳（カテゴリ別）</h2>
-            <div id="pie" style="width:100%;height:256px"></div>
+            {foodBreakdown.length === 0 ? (
+              <p style={{fontSize:12,color:"#64748b"}}>まだ食費の記録がありません。</p>
+            ) : (
+              <div className="h320" style={{height:256}}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie data={foodBreakdown} dataKey="value" nameKey="name" outerRadius={110} label>
+                      {foodBreakdown.map((_, i) => <Cell key={i} />)}
+                    </Pie>
+                    <Tooltip formatter={(v,n)=>[yen(v),n]} />
+                    <Legend />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+            )}
           </section>
 
           <section className="card mb12">
@@ -316,8 +333,8 @@
                 <button className="btn-subtle" onClick={()=> archiveCurrent()}>締め日アーカイブ</button>
                 <button className="btn-subtle" onClick={()=> clearThisCycle()}>今サイクルの出費だけ削除</button>
                 <button className="btn-subtle" onClick={()=> exportJSON()}>エクスポート</button>
-                <label className="btn-subtle" style={{cursor:'pointer'}}>
-                  インポート<input type="file" accept="application/json" style={{display:'none'}} onChange={(e)=> e.target.files?.[0] && importJSON(e.target.files[0])} />
+                <label className="btn-subtle" style={{cursor:'pointer'}}>インポート
+                  <input type="file" accept="application/json" style={{display:'none'}} onChange={(e)=> e.target.files?.[0] && importJSON(e.target.files[0])} />
                 </label>
                 <button className="btn-danger" onClick={()=> resetAll()}>全消去</button>
               </div>
@@ -326,15 +343,43 @@
             <div className="box">
               <table style="width:100%; border-collapse:collapse; font-size:14px">
                 <thead style="background:#f1f5f9"><tr><th>日付</th><th>種別</th><th>カテゴリ</th><th>金額</th><th>メモ</th><th>操作</th></tr></thead>
-                <tbody id="tbody">
-                  <!-- 明細はReact内で描画 -->
+                <tbody>
+                  {cycleExpenses.length===0 && (
+                    <tr><td style="text-align:center;padding:8px" colSpan="6">まだ記録がありません</td></tr>
+                  )}
+                  {cycleExpenses.slice().sort((a,b)=> a.date<b.date?1:-1).map(e=>(
+                    <tr className="odd:bg-white even:bg-slate-50" key={e.id}>
+                      <td className="td">{e.date}</td>
+                      <td className="td">{getType(e)}</td>
+                      <td className="td">{getSubcategory(e)}</td>
+                      <td className="td" style="text-align:right">{yen(e.amount)}</td>
+                      <td className="td">{e.note}</td>
+                      <td className="td" style="text-align:right"><button className="btn-subtle" onClick={()=> removeExpense(e.id)}>削除</button></td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>
 
             <div>
               <h3 style={{fontWeight:600,marginBottom:8}}>アーカイブ一覧</h3>
-              <div id="archives"></div>
+              <div>
+                {archives.length===0 && (<p style={{fontSize:12,color:"#64748b"}}>まだアーカイブがありません。</p>)}
+                {archives.map(a=>(
+                  <div key={a.archivedAt} className="card" style={{marginBottom:8}}>
+                    <div style={{fontSize:14,fontWeight:600}}>{a.month}</div>
+                    <div style={{fontSize:11,color:"#64748b",marginBottom:6}}>archived: {new Date(a.archivedAt).toLocaleString()}</div>
+                    <div className="grid5">
+                      <Summary label="給与" value={yen(a.income)} />
+                      <Summary label="固定費" value={yen(a.totalFixed)} />
+                      <Summary label="買いたいもの" value={yen(a.totalWish)} />
+                      <Summary label="自由枠" value={yen(a.monthlyPocket)} />
+                      <Summary label="差額" value={yen(a.balance)} highlight={a.balance} />
+                    </div>
+                    <div style={{fontSize:11,color:"#64748b",marginTop:4}}>期間: {a.periodStart} 〜 {a.periodEnd}（締め日: {a.closeDay}）</div>
+                  </div>
+                ))}
+              </div>
             </div>
           </section>
 
